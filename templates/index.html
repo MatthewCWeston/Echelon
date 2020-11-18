@@ -1,0 +1,528 @@
+#@title Index.html
+%%writefile templates/index.html
+<!DOCTYPE html>
+<html>
+	<head>
+		<!-- Prism.js (for syntax highlighting) -->
+		<link href="static/prism/prism.css" rel="stylesheet" />
+    	<script src="static/prism/prism.js"></script>
+
+		<style>
+			html, body { margin: 0px; padding: 0px; width: 100%; height: 100%;
+				font-family: "Lucida Console", Monaco, monospace;
+			}
+
+			h1 {
+				color: #FFAA00;
+				margin-left: 40px;
+			}
+
+			#main_container {
+				background-color: #AAAAAA;
+				width: 100%;
+				height: 100%;
+				display: flex;
+				flex-direction: row;
+				justify-content: flex-end;
+			}
+
+			#sidebar {
+				display: flex;
+				flex-direction: column;
+				background-color: #111111;
+				min-width: 600px;
+				flex-grow: 0;
+				padding: 10px;
+				border-left-color: #333333;
+				border-left-width: 1px;
+				border-left-style: solid;
+			}
+
+			canvas {
+				flex-grow: 0;
+			}
+
+			#scheme_bar {
+				display: flex;
+				flex-direction: row-reverse;
+				background-color: #222222;
+				flex-grow: 0;
+				min-height: 40px;
+			}
+
+			#scheme_bar div {
+				color: white;
+				border-width: 1px;
+				border-color: white;
+				border-style: solid;
+				margin: 5px;
+				border-radius: 5px;
+				padding: 5px;
+				user-select: none; 
+				max-height: 17px;
+			}
+
+			#scheme_bar div:hover {
+				color: #FFFF00;
+				border-color: #FFFF00;
+			}
+
+			#agg_bar {
+				display: flex;
+				flex-direction: row-reverse;
+				background-color: #333333;
+				flex-grow: 0;
+				min-height: 40px;
+			}
+
+			#agg_bar div {
+				color: white;
+				border-width: 1px;
+				border-color: white;
+				border-style: solid;
+				margin: 5px;
+				border-radius: 5px;
+				padding: 5px;
+				user-select: none; 
+				max-height: 17px;
+			}
+
+			#agg_bar div:hover {
+				color: #FFFF00;
+				border-color: #FFFF00;
+			}
+
+			#upload_bar {
+				display: flex;
+				flex-direction: row-reverse;
+				background-color: #606060;
+				flex-grow: 0;
+				min-height: 40px;
+				color: white;
+			}
+
+			#upload_bar div {
+				color: white;
+				border-width: 1px;
+				border-color: white;
+				border-style: solid;
+				margin: 5px;
+				border-radius: 5px;
+				padding: 5px;
+				user-select: none; 
+				max-height: 17px;
+			}
+
+			#upload_bar div:hover {
+				color: #FFFF00;
+				border-color: #FFFF00;
+			}
+
+			p {
+				background-color: black;
+				color: lime;
+			}
+
+			#sample div {
+				border-width: 1px;
+				border-radius: 5px;
+				border-color: lime;
+				border-style: solid;
+				padding: 10px;
+				color: lime;
+				margin-bottom: 7px;
+				margin-right: 10px;
+				overflow-wrap: break-word;
+				font-size: 10px;
+				width: 550px;
+			}
+
+			#sample div[correctness="0"] {
+				border-color: #FF0000;
+			}
+
+			#sample {
+				overflow-y: scroll;
+				overflow-x: hidden;
+			}
+
+			::-webkit-scrollbar {
+			  width: 10px;
+			}
+			::-webkit-scrollbar-track {
+			  background: #000000; 
+			}
+			::-webkit-scrollbar-thumb {
+			  background: #00FF00; 
+			}
+			::-webkit-scrollbar-thumb:hover {
+			  background: #00AA00; 
+			}
+		</style>
+	</head>
+	<body>
+
+		<div id='main_container'>
+			<canvas id='canvas'></canvas>
+
+
+			<div id='sidebar'>
+				<div id='scheme_bar'></div>
+				<div id='agg_bar'>
+					<div onclick="aggregateMode=false; render();">Point mode</div>
+					<div onclick="aggregateMode=true; render();">Aggregate mode</div>
+				</div>
+				<div id='upload_bar'>
+					<div onclick="document.getElementById('fileUpload').click()">Upload Data</div>
+					<input type="file" style='display:none' id="fileUpload">
+				</div>
+				<h1>Selection Sample</h1>
+				<p><= 5 samples from the current selection</p>
+				<div id='sample'></div>
+			</div>
+		</div>
+	</body>
+
+  <!-- Socket.io import -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.7.3/socket.io.min.js"></script>
+  <!-- End of imports -->
+
+
+	<script type="text/javascript">
+		window.onresize = function()
+		{
+			if(!canvas) return;
+
+			cw = window.innerWidth-600;
+			ch = canvas.clientHeight;
+
+			canvas.width = cw;
+			canvas.height = ch;
+			render();
+		};
+
+		var cw;
+		var ch;
+		const b = 100;
+		const pt_size = 5;
+		canvas = document.getElementById('canvas');
+		const ctx = canvas.getContext('2d');
+
+		var maxX = 1;
+		var maxY = 1;
+		var minX = 1;
+		var minY = 1;
+		var data = [];
+		var schemes = {};
+		var schemeClusters = {}; // name => [{size, x, y, contents}]
+		var selectedScheme = '';
+		var aggregateMode = false;
+
+		var mouseDown = false;
+		var mouseStart;
+
+		var selected = [];
+		var selectedClass = Infinity;
+
+		const bg_t = '11';
+		const ig_t = '22';
+		const base_t = '55';
+		const baseAgg_t = '88';
+		const sel_t = 'AA';
+		const SAMPLE_SIZE = 5;
+
+		function toScrX(x) {
+			return b+((x-minX)/(maxX-minX))*(cw-2*b);
+		}
+
+		function toScrY(y) {
+			return b+((y-minY)/(maxY-minY))*(ch-2*b);
+		}
+
+		function render() {
+			ctx.strokeStyle = '#333333';
+			ctx.fillStyle = '#EEEEEE';
+			ctx.fillRect(0,0,cw,ch);
+			let x1 = b/2;
+			let x2 = cw-b/2;
+			let y1 = b/2;
+			let y2 = ch-b/2;
+			ctx.beginPath();
+			ctx.moveTo(x1, y1);
+			ctx.lineTo(x1, y2);
+			ctx.lineTo(x2, y2);
+			ctx.stroke();
+
+			let ss = schemes[selectedScheme];
+			data.forEach(d=>{
+				let c = d.schemes[selectedScheme];
+				let sel = (selected.indexOf(d)!=-1);
+				let t = (sel) ? sel_t : ((selectedClass==Infinity || c==selectedClass) ? base_t : ig_t);
+				if (aggregateMode) {
+					t = bg_t;
+				}
+				ctx.strokeStyle = '#000000'+t;
+				ctx.fillStyle = c==-1 ? '#885555'+t : (ss[c%ss.length] + t);
+				ctx.beginPath();
+				// 
+				let scrX = toScrX(d.x);
+				let scrY = toScrY(d.y);
+				ctx.arc(scrX, scrY, pt_size, 0, 2*Math.PI);
+				d.scrX = scrX;
+				d.scrY = scrY;
+				ctx.fill();
+				ctx.stroke();
+				if (sel) {
+					ctx.strokeStyle = schemes['correctness'][d.schemes['correctness']] + t;
+					ctx.beginPath();
+					ctx.arc(scrX, scrY, pt_size+2, 0, 2*Math.PI);
+					ctx.stroke();
+				}
+			});
+
+			// Clusters
+			if (schemeClusters[selectedScheme] && aggregateMode){
+				Object.keys(schemeClusters[selectedScheme]).forEach(c=>{
+					if (c != -1) {
+						let cl = schemeClusters[selectedScheme][c];
+						let scrX = toScrX(cl.x);
+						let scrY = toScrY(cl.y);
+						cl.scrX = scrX;
+						cl.scrY = scrY;
+						//
+						let t = (selectedClass==Infinity || c==selectedClass) ? baseAgg_t : ig_t;
+						ctx.strokeStyle = '#000000';
+						ctx.fillStyle = ss[c%ss.length]+t;
+						//
+						ctx.beginPath();
+						ctx.arc(scrX, scrY, cl.radius, 0, 2*Math.PI);
+						ctx.fill();
+						ctx.stroke();
+						if (c==selectedClass) {
+							ctx.beginPath();
+							ctx.arc(scrX, scrY, cl.radius+3, 0, 2*Math.PI);
+							ctx.stroke();
+						}
+					}
+				});
+			}
+
+		}
+
+		function addSchemes() {
+			let h = document.getElementById('scheme_bar');
+			text = '';
+			Object.keys(schemes).forEach(x=>{
+				text+='<div onclick="setScheme(this)">'+x+'</div>';
+			});
+			h.innerHTML = text;
+		}
+
+		function setScheme(x) {
+			selectedScheme = x.innerText;
+			selectedClass = Infinity;
+			render();
+		}
+
+		function getClusters() {
+			Object.keys(schemes).forEach(s=>{
+				let scs = schemeClusters[s] = {};
+				// Sum X and Y, and calculate count for each cluster
+				data.forEach(d=>{
+					let cluster = d.schemes[s];
+					if (!scs[cluster]) {
+						scs[cluster] = {'x':0, 'y':0, 'count':0}
+					}
+					scs[cluster].x += d.x;
+					scs[cluster].y += d.y;
+					scs[cluster].count += 1;
+				});
+				// Divide X and Y by count for each cluster
+				Object.keys(scs).forEach(c=>{
+					if (scs[c].count > 0) {
+						scs[c].x = scs[c].x/scs[c].count;
+						scs[c].y = scs[c].y/scs[c].count;
+					}
+					scs[c].radius = (scs[c].count * pt_size**2)**.5;
+				});
+			});
+		}
+
+		// Get the data
+		function getData() {
+			schemes = {"correctness": ["#FF0000", "#00AA00"], "OPTICS": ["#006400", "#00008b", "#b03060", "#ff4500", "#ffff00", "#deb887", "#00ff00", "#00ffff", "#ff00ff", "#6495ed"], "DBSCAN": ["#006400", "#00008b", "#b03060", "#ff4500", "#ffff00", "#deb887", "#00ff00", "#00ffff", "#ff00ff", "#6495ed"]}
+			data = []; 
+			selectedScheme = 'correctness';
+			addSchemes();
+			getClusters();
+		}
+
+		function drawSelect() {
+			ctx.strokeStyle = '#000000';
+			ctx.beginPath();
+			ctx.rect(mouseStart[0], mouseStart[1], mousePos[0]-mouseStart[0], mousePos[1]-mouseStart[1]);
+			ctx.stroke();
+		}
+
+		function convert(pt) {
+			return [(pt[0]-b)/(cw-2*b), (pt[1]-b)/(ch-2*b)]
+		}
+
+		function sampleSelected() {
+			let h = document.getElementById('sample');
+			let sample = [];
+			let temp = selected.slice();
+			for (let i = 0; i<SAMPLE_SIZE; i++) {
+				if (temp.length == 0) {break;}
+				let ix = Math.floor(Math.random()*temp.length);
+				sample.push(temp.splice(ix,1)[0]);
+			}
+			let text = '';
+			sample.forEach(x=>{
+				text+='<div correctness="'+x.schemes['correctness']+'"><pre><code class="language-SQL">'+x.text.replace('>','\>')+'</code></pre></div>';
+			});
+			h.innerHTML = text;
+			h.scrollTop = 0;
+			Prism.highlightAll();
+		}
+
+		function select(s, e) {
+			selected = [];
+			data.forEach(d=>{
+				let x = d.scrX;
+				let y = d.scrY;
+				if (s[0]<x && e[0]>x && s[1]<y && e[1]>y && (selectedClass == Infinity || selectedClass == d.schemes[selectedScheme])) {
+					selected.push(d);
+				}
+			});
+			sampleSelected();
+		}
+
+		function click(){
+			t = mousePos;//convert(mousePos);
+			md = Infinity;
+			mc = Infinity;
+			closest = false;
+			if (aggregateMode == false) {
+				data.forEach(d=>{
+					let dst = ((d.scrX-t[0])**2 + (d.scrY-t[1])**2)**.5;
+					if (dst < md) {
+						md = dst;
+						mc = d.schemes[selectedScheme];
+						closest = d;
+					}
+				});
+				if (md < pt_size*2) {
+					selectedClass = mc;
+				} else {
+					selectedClass = Infinity;
+				}
+				selected = selected.filter(x=>x.schemes[selectedScheme]==selectedClass);
+				sampleSelected();
+			} else {
+				Object.keys(schemeClusters[selectedScheme]).forEach(c=>{
+					if (c != -1) {
+						let cl = schemeClusters[selectedScheme][c];
+						let dst = ((cl.scrX-t[0])**2 + (cl.scrY-t[1])**2)**.5;
+						if (dst < md && dst < cl.radius) {
+							md = dst;
+							mc = c;
+							closest = cl;
+						}
+					}
+				});
+				if (closest) {
+					selectedClass = mc;
+					selected = data.filter(x=>x.schemes[selectedScheme]==selectedClass);
+					sampleSelected();
+				} else {
+					selectedClass = Infinity;
+				}
+			}
+		}
+
+		// Mouse down --> save start position
+		window.onmousedown = function(e) {
+			if (mousePos[0]>cw) {return;}
+			if (e.button == 0) {
+				mouseDown = true;
+				mouseStart = mousePos.slice();
+			}
+		}
+		window.onmouseup = function(e) {
+			if (e.button == 0) {
+				if (mouseDown == true) {
+					mouseDown = false;
+					if (Math.abs(mousePos[0]-mouseStart[0])>5) {
+						select(mouseStart, mousePos);
+					} else {
+						click(mousePos);
+					}
+					render();
+				}
+			}
+		}
+		window.oncontextmenu = function(e) {
+			e.preventDefault();
+		}
+		window.onmousemove = function(e) {
+			mousePos = [e.clientX+20, e.clientY];
+			if (mouseDown) {
+				render();
+				drawSelect();
+			}
+		}
+
+		// Init
+		window.onresize();
+		getData();
+		render();
+	</script>
+
+	<script type="text/javascript">
+		// Add data
+		var socket = io.connect('http://' + document.domain + ':' + location.port);
+		//
+		socket.on( 'connect', function() {
+			// Connection event
+			socket.emit( 'connectionEvent', {
+				data: 'User Connected'
+			});
+		});
+		//
+		socket.on( 'new_data', function( msg ) {
+			console.log("new_data: " + msg);
+			msg = JSON.parse(msg);
+			addData(msg['data']);
+		});
+		//
+		function addData(d) {
+			d.forEach(x=>{
+				maxX = Math.max(maxX, x.x);
+	  			maxY = Math.max(maxY, x.y);
+	  			minX = Math.min(minX, x.x);
+	  			minY = Math.min(minY, x.y);
+			});
+			data = d;
+			getClusters();
+			render();
+		}
+
+
+		function sendFile() {
+			console.log(this.files[0]);
+			let formData = new FormData();
+			formData.append('zipFile', this.files[0]);
+			// Upload file
+			fetch('/zip', {
+				method: 'POST',
+				body: formData
+			})
+			.then(response => response.json())
+			.then(data => {console.log(data.path);})
+			.catch(error => {console.error(error);});
+		}
+		document.getElementById("fileUpload").addEventListener("change", sendFile);
+	</script>
+
+</html>
